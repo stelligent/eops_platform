@@ -1,0 +1,17 @@
+development:
+  adapter: mysql
+  host: <%= database_endpoint %>
+  pool: 5
+  timeout: 5000
+  database:  <%= database_name %>
+  username: <%= database_username %>
+  password: <%= database_password %>
+
+production:
+  adapter: mysql
+  host: <%= database_endpoint %>
+  pool: 5
+  timeout: 5000
+  database:  <%= database_name %>
+  username: <%= database_username %>
+  password: <%= database_password %>

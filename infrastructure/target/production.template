@@ -1,0 +1,300 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  
+  "Description" : "Target",
+  
+  "Parameters" : {
+	
+	"KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "String",
+      "Default" : "development",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    },
+    "InstanceType" : {
+	  "Type" : "String",
+	  "Default" : "c1.medium",
+	  "AllowedValues" : [ "t1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m2.xlarge", "m2.2xlarge", "m2.4xlarge", "c1.medium", "c1.xlarge"]
+	},
+	"UseScriptedOrAMI" : {
+	  "Description" : "When creating the instance, do you want to run the puppet scripts or use the prebuilt AMI. Allowed values are: SCRIPTED or AMI",
+	  "Type" : "String",
+	  "AllowedValues" : ["SCRIPTED", "AMI"]
+	},
+	"AMI" : {
+	  "Type" : "String",
+	  "Default" : "ami-7341831a"
+	},
+	"SGID" : {
+	  "Type" : "String",
+	  "Default" : "sg-dab4d0b2"
+	},
+	"Group" : {
+	  "Type" : "String"
+	},
+	"ApplicationName" : {
+	  "Type" : "String",
+	  "Default" : "ami"
+	},
+	"HostedZone" : {
+	  "Type" : "String",
+	  "Default" : "devopscloud.com"
+	},
+	"S3Bucket" : {
+	  "Description" : "Artifact Bucket",
+	  "Type" : "String",
+	  "Default" : "sea2shore"
+    },
+	"SNSTopic" : {
+	  "Description" : "SNS Topic",
+	  "Type" : "String"
+    }
+  },
+
+  "Resources" : {
+	
+	"addUserToGroup" : {
+	   "Type" : "AWS::IAM::UserToGroupAddition",
+	   "Properties" : {
+	      "GroupName" : { "Ref" : "Group" },
+	      "Users" : [ { "Ref" : "User" } ]
+	   }
+	},
+	
+	"User" : {
+      "Type" : "AWS::IAM::User",
+      "Properties" : {
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "root",
+          "PolicyDocument": { "Statement":[{
+            "Effect":"Allow",
+            "Action":"*",
+            "Resource":"*"
+          }
+        ]}
+        }]
+      }
+    },
+	
+	"HostKeys" : {
+	  "Type" : "AWS::IAM::AccessKey",
+      "Properties" : {
+	    "UserName" : { "Ref" : "User" }
+	  }
+	},
+	
+	"DNS" : {
+      "Type" : "AWS::Route53::RecordSetGroup",
+	  "Properties" : {
+	    "HostedZoneName" : { "Fn::Join" : [ "", [ {"Ref" : "HostedZone"}, "." ]]},
+	    "RecordSets" : [
+		  {
+			"Name" : { "Fn::Join" : ["", [ { "Ref" : "ApplicationName" }, ".", { "Ref" : "HostedZone" }, "." ]]},
+			"Type" : "A",
+			"TTL"  : "900",
+			"ResourceRecords" : [ { "Ref" : "IPAddress" } ]
+		  }]
+	  }
+	},
+	
+	"WebServer": {  
+      "Type": "AWS::EC2::Instance",
+	  "Metadata" : {
+	    "AWS::CloudFormation::Init" : {
+		  "config" : {
+			"sources" : {
+			  "/home/ec2-user/" : { "Fn::Join" : ["", ["https://s3.amazonaws.com/", { "Ref" : "S3Bucket" }, "/puppet.tar.gz"]]},
+			  "/root/" : { "Fn::Join" : ["", ["https://s3.amazonaws.com/", { "Ref" : "S3Bucket" }, "/capistrano.tar.gz"]]}
+			},
+			"files" : {
+			  "/opt/aws/aws.config" : {
+				"content" : { "Fn::Join" : ["", [
+				  "AWS.config(\n",
+					":access_key_id => \"", { "Ref" : "HostKeys" }, "\",\n",
+					":secret_access_key => \"", {"Fn::GetAtt": ["HostKeys", "SecretAccessKey"]}, "\")\n"
+                  ]]},
+				"mode"   : "000555",
+                "owner"  : "ec2-user",
+                "group"  : "ec2-user"
+			  },
+			
+			  "/tmp/ruby-1.9.3p0-2.amzn1.x86_64.rpm" : { 
+                "source" : { "Fn::Join" : ["", ["https://s3.amazonaws.com/", { "Ref" : "S3Bucket" }, "/resources/rpm/ruby-1.9.3p0-2.amzn1.x86_64.rpm"]]}, 
+                "mode" : "000600", 
+                "owner" : "ec2-user",
+                "group" : "ec2-user",
+				"authentication" : "S3AccessCreds"
+              },
+
+			  "/tmp/id_rsa" : { 
+                "source" : { "Fn::Join" : ["", ["https://s3.amazonaws.com/", { "Ref" : "S3Bucket" }, "/private/id_rsa"]]}, 
+                "mode" : "000600", 
+                "owner" : "ec2-user",
+                "group" : "ec2-user",
+				"authentication" : "S3AccessCreds"
+              },
+			
+			  "/tmp/id_rsa.pub" : { 
+                "source" : { "Fn::Join" : ["", ["https://s3.amazonaws.com/", { "Ref" : "S3Bucket" }, "/private/id_rsa.pub"]]}, 
+                "mode" : "000600", 
+                "owner" : "ec2-user",
+                "group" : "ec2-user",
+				"authentication" : "S3AccessCreds"
+              }
+			}
+		  }
+	    },
+		"AWS::CloudFormation::Authentication" : {
+		  "S3AccessCreds" : {
+		    "type" : "S3",
+		    "accessKeyId" : { "Ref" : "HostKeys" },
+		    "secretKey" : {"Fn::GetAtt": ["HostKeys", "SecretAccessKey"]},
+		    "buckets" : [ { "Ref" : "S3Bucket" } ]
+		  }
+		}
+	  },
+	  "Properties": {
+		"ImageId" : { "Ref" : "AMI" },
+		"InstanceType"     : { "Ref" : "InstanceType" },
+		"SecurityGroups"   : [ { "Ref" : "FrontendGroup" } ],
+		"SecurityGroupIds" : [ { "Ref" : "SGID" } ],
+		"KeyName"        : { "Ref" : "KeyName" },
+		"Tags": [ { "Key": "Name", "Value": "Target" } ],
+		"UserData" : { "Fn::Base64" : { "Fn::Join" : ["", [
+		  "#!/bin/bash -v\n",
+		    "if [ ", { "Ref" : "UseScriptedOrAMI" }, " == 'SCRIPTED' ]; then\n",
+			
+				"yum update -y aws-cfn-bootstrap\n",
+				
+				"# Install Packages\n",
+				"/opt/aws/bin/cfn-init -v -s ", { "Ref" : "AWS::StackName" }, " -r WebServer ",
+				"    --access-key ", { "Ref" : "HostKeys" },
+				"    --secret-key ", { "Fn::GetAtt" : [ "HostKeys", "SecretAccessKey" ]},
+				"    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+				"# Install Ruby Dependency\n",
+				"yum install -y libxslt-devel\n",
+
+				"# Install Ruby 1.9.3\n",
+				"rpm -Uvh /tmp/ruby-1.9.3p0-2.amzn1.x86_64.rpm\n",
+
+				"# Install Puppet 3.0.1 from Rubygem\n",
+				"gem install puppet --no-rdoc --no-ri\n",
+				"groupadd puppet\n",
+
+				"# Run Puppet\n",
+				"puppet apply --modulepath=/home/ec2-user/modules /home/ec2-user/manifests/site.pp\n",
+
+				"# Disable tty for ec2-user\n",
+				"echo \"Defaults:%ec2-user !requiretty\" >> /etc/sudoers\n",
+				"echo \"Defaults:ec2-user !requiretty\" >> /etc/sudoers\n",
+				
+				"# Add rsa key to Authorized Keys\n",
+				"cat /tmp/id_rsa.pub >> /home/ec2-user/.ssh/authorized_keys\n",
+				
+			"else\n",
+			
+				"# Install Packages\n",
+				"/opt/aws/bin/cfn-init -v -s ", { "Ref" : "AWS::StackName" }, " -r WebServer ",
+				"    --access-key ", { "Ref" : "HostKeys" },
+				"    --secret-key ", { "Fn::GetAtt" : [ "HostKeys", "SecretAccessKey" ]},
+				"    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+			
+				"# Add rsa key to Authorized Keys\n",
+				"cat /tmp/id_rsa.pub >> /home/ec2-user/.ssh/authorized_keys\n",
+				
+				"cd /root/deployment/\n",
+				
+				"# Run Capistrano Deployment\n",
+				"HOME=/root cap setup key=/tmp/id_rsa type=local\n",
+				
+		   "fi\n",
+		
+		   "/opt/aws/bin/cfn-signal", " -e 0", " '", { "Ref" : "WaitHandle" }, "'","\n"
+		]]}}		
+	  }
+	},
+	
+	"FrontendGroup" : {
+	  "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+	    "GroupDescription" : "Enable SSH Access",
+		"SecurityGroupIngress" : [
+		  { "IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : "0.0.0.0/0" },
+		  { "IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "0.0.0.0/0" },
+		  { "IpProtocol" : "tcp", "FromPort" : "8080", "ToPort" : "8080", "CidrIp" : "0.0.0.0/0" }
+		]
+	  }
+	},
+	
+	"IPAddress" : {
+	  "Type" : "AWS::EC2::EIP"
+	},
+	
+	"IPAssociation" : {
+	  "Type" : "AWS::EC2::EIPAssociation",
+	  "Properties" : {
+		"InstanceId" : { "Ref" : "WebServer" },
+		"EIP" : { "Ref" : "IPAddress" }
+	  }
+	},
+	
+	"CPUAlarmLow": {
+	 "Type": "AWS::CloudWatch::Alarm",
+     "Properties": {
+        "AlarmDescription": "Scale-down if CPU < 70% for 10 minutes",
+        "MetricName": "CPUUtilization",
+        "Namespace": "AWS/EC2",
+        "Statistic": "Average",
+        "Period": "300",
+        "EvaluationPeriods": "2",
+        "Threshold": "70",
+        "AlarmActions": [ { "Ref": "SNSTopic" } ],
+		"Dimensions": [{
+		  "Name": "WebServerName",
+		  "Value": { "Ref": "WebServer" }
+		}],
+        "ComparisonOperator": "LessThanThreshold"
+      }
+    },
+	
+	"WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+    
+    "WaitCondition" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "WebServer",
+      "Properties" : {
+        "Handle" : { "Ref" : "WaitHandle" },
+        "Timeout" : "900"
+      }
+    }
+  },
+
+  "Outputs" : {
+    "ArtifactBucket" : {
+      "Value" : { "Ref" : "S3Bucket" }
+    },
+	"StackName" : {
+      "Value" : { "Ref" : "AWS::StackName" }
+    },
+	"ApplicationName" : {
+	  "Value" : { "Ref" : "ApplicationName" }
+	},
+    "Domain" : {
+      "Value" : { "Fn::Join" : ["", [{ "Ref" : "ApplicationName" }, ".", { "Ref" : "HostedZone" }]] },
+      "Description" : "Full domain"
+    },
+	"PrivateIpAddress" : {
+	  "Value" : { "Fn::GetAtt" : ["WebServer", "PrivateIp"]}
+	},
+	"InstanceIPAddress" : {
+      "Value" : { "Ref" : "IPAddress" }
+    }
+  }
+}
